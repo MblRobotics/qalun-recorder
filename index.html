@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light">
+<meta name="theme-color" content="#0f5132">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self'; style-src 'self'; script-src 'self'; font-src 'self'; worker-src 'self'">
+<title>تسجيل القرآن برواية قالون</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<link rel="preload" href="vendor/fonts/qalun.ttf" as="font" type="font/ttf" crossorigin>
+<link rel="stylesheet" href="styles.css">
+<script type="module" src="app.js"></script>
+</head>
+<body>
+<main id="app">
+
+  <!-- 1. Setup -->
+  <section id="screen-setup" class="screen" hidden>
+    <h1>تسجيل القرآن برواية قالون</h1>
+    <p class="lead">تساعدنا تسجيلاتك على تعليم برنامجٍ مجانيّ يستمع للتلاوة برواية قالون. تبقى التسجيلات على هاتفك حتى ترسلها أنت.</p>
+    <form id="setup-form" autocomplete="off">
+      <label class="field">
+        <span>الاسم أو الكنية <b class="req">*</b></span>
+        <input id="in-name" name="name" type="text" required maxlength="40" placeholder="مثلاً: أبو محمد" enterkeyhint="done">
+        <small>يظهر في أسماء الملفات فقط (حروف وأرقام).</small>
+      </label>
+      <div class="row2">
+        <label class="field">
+          <span>الفئة العمرية (اختياري)</span>
+          <select id="in-age" name="age">
+            <option value="">—</option>
+            <option value="under-13">أقل من ١٣</option>
+            <option value="13-17">١٣–١٧</option>
+            <option value="18-29">١٨–٢٩</option>
+            <option value="30-44">٣٠–٤٤</option>
+            <option value="45-59">٤٥–٥٩</option>
+            <option value="60+">٦٠ فأكثر</option>
+          </select>
+        </label>
+        <label class="field">
+          <span>الجنس (اختياري)</span>
+          <select id="in-gender" name="gender">
+            <option value="">—</option>
+            <option value="male">ذكر</option>
+            <option value="female">أنثى</option>
+          </select>
+        </label>
+      </div>
+      <fieldset class="modes">
+        <legend>طريقة القراءة</legend>
+        <label class="mode">
+          <input type="radio" name="mode" value="qalun" checked>
+          <span><strong>أقرأ بقالون</strong><small>اقرأ الآية كما هي مكتوبة في المصحف.</small></span>
+        </label>
+        <label class="mode">
+          <input type="radio" name="mode" value="hafs">
+          <span><strong>تمرين حفص</strong><small>اقرأ الكلمات الملوّنة برواية حفص عمدًا، كما يُكتب تحت الآية.</small></span>
+        </label>
+      </fieldset>
+      <button type="submit" class="btn primary big">ابدأ التسجيل</button>
+      <button type="button" class="btn link" data-action="help">كيف تسجّل؟</button>
+    </form>
+  </section>
+
+  <!-- 2. Recording -->
+  <section id="screen-record" class="screen" hidden>
+    <header class="bar">
+      <div class="where">
+        <div id="surah-name" class="surah"></div>
+        <div id="ayah-ref" class="ref"></div>
+      </div>
+      <div class="stats" aria-live="polite">
+        <span><b id="stat-count">0</b> آية</span>
+        <span><b id="stat-min">0</b> دقيقة</span>
+      </div>
+    </header>
+
+    <div id="mode-badge" class="badge"></div>
+    <div id="ayah" class="ayah quran" lang="ar"></div>
+    <div id="hafs-hint" class="hafs-hint" hidden></div>
+
+    <div class="meter" aria-hidden="true"><div id="meter-bar"></div><div class="meter-mark"></div></div>
+    <p id="status" class="status" role="status" aria-live="polite"></p>
+
+    <div class="controls">
+      <button id="btn-record" class="btn rec big" type="button"><span class="dot"></span><span class="lbl">سجّل</span></button>
+      <div class="row2">
+        <button id="btn-play" class="btn" type="button" disabled>▶ استمع</button>
+        <button id="btn-redo" class="btn" type="button" disabled>↺ أعد التسجيل</button>
+      </div>
+      <div class="row2">
+        <button id="btn-skip" class="btn" type="button">تخطَّ</button>
+        <button id="btn-next" class="btn primary" type="button" disabled>التالي ←</button>
+      </div>
+    </div>
+
+    <footer class="foot">
+      <button class="btn small" type="button" data-action="export">إرسال التسجيلات</button>
+      <button class="btn small" type="button" data-action="help">كيف تسجّل؟</button>
+      <button class="btn small" type="button" data-action="settings">الإعدادات</button>
+    </footer>
+  </section>
+
+  <!-- 3. Export -->
+  <section id="screen-export" class="screen" hidden>
+    <h2>إرسال التسجيلات</h2>
+    <p id="export-summary" class="lead"></p>
+    <p class="note">يُجمَع كل شيء في ملف ZIP واحد. اختر «مشاركة» لإرساله (واتساب، تيليجرام، البريد…) أو «تنزيل» لحفظه في الهاتف ثم إرساله كمستند.</p>
+    <div class="controls">
+      <button id="btn-share" class="btn primary big" type="button">مشاركة الملف</button>
+      <button id="btn-download" class="btn big" type="button">تنزيل الملف</button>
+    </div>
+    <div id="export-confirm" class="card" hidden>
+      <p>هل حُفظ الملف أو أُرسل بنجاح؟</p>
+      <div class="row2">
+        <button id="btn-confirm-yes" class="btn primary" type="button">نعم، تم</button>
+        <button id="btn-confirm-no" class="btn" type="button">لا</button>
+      </div>
+    </div>
+    <p id="export-status" class="status" role="status" aria-live="polite"></p>
+    <hr>
+    <button id="btn-new-session" class="btn danger" type="button">جلسة جديدة (حذف التسجيلات المُرسلة)</button>
+    <button class="btn link" type="button" data-action="back">رجوع إلى التسجيل</button>
+  </section>
+
+  <!-- Microphone permission explainer -->
+  <section id="screen-mic" class="screen" hidden>
+    <h2>نحتاج إلى الميكروفون</h2>
+    <p class="lead">سيطلب المتصفح إذنًا باستخدام الميكروفون. اضغط «سماح». يُستعمل الميكروفون فقط أثناء ضغطك على «سجّل»، ولا يُرسل أي صوت إلى الإنترنت.</p>
+    <p id="mic-error" class="error" hidden></p>
+    <button id="btn-mic" class="btn primary big" type="button">متابعة</button>
+    <button class="btn link" type="button" data-action="settings">رجوع</button>
+  </section>
+</main>
+
+<dialog id="help">
+  <h2>كيف تسجّل؟</h2>
+  <ul>
+    <li>اختر <b>مكانًا هادئًا</b>: أغلق المروحة والتلفاز، وابتعد عن الشارع.</li>
+    <li>أمسك الهاتف على بعد <b>٢٠ إلى ٣٠ سم</b> من فمك، ولا تغطِّ الميكروفون بيدك.</li>
+    <li>اقرأ <b>بسرعتك العادية</b>، بلا تجويد مبالغ فيه ولا عجلة.</li>
+    <li><b>آية واحدة في كل تسجيل</b>: اضغط «سجّل»، اقرأ الآية، ثم اضغط «إيقاف».</li>
+    <li>إن أخطأت أو قاطعك صوت، اضغط «أعد التسجيل». <b>لا بأس بالإعادة.</b></li>
+    <li>إن لم تعرف الآية أو كانت طويلة عليك، اضغط «تخطَّ».</li>
+    <li>في «تمرين حفص»: اقرأ الكلمة الملوّنة كما تُقرأ في رواية حفص (المكتوبة تحت الآية)، وباقي الآية كما هو.</li>
+    <li>عند الانتهاء اضغط «إرسال التسجيلات» وأرسل الملف إلى صاحب المشروع.</li>
+  </ul>
+  <form method="dialog"><button class="btn primary big">فهمت</button></form>
+</dialog>
+
+<noscript><p class="error">هذا التطبيق يحتاج إلى تفعيل JavaScript.</p></noscript>
+</body>
+</html>

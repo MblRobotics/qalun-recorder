@@ -1,0 +1,12 @@
+{
+  "name": "تسجيل القرآن برواية قالون",
+  "short_name": "تسجيل قالون",
+  "lang": "ar",
+  "dir": "rtl",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f4f1ea",
+  "theme_color": "#0f5132",
+  "icons": [{ "src": "icon.svg", "sizes": "any", "type": "image/svg+xml" }]
+}

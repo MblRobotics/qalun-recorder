@@ -1,0 +1,17 @@
+{
+  "name": "qalun-recorder",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Record Qur'an ayahs in the Qalun riwaya on a phone, export a ZIP dataset.",
+  "scripts": {
+    "build-data": "node scripts/build-data.mjs",
+    "test": "node --test tests/*.test.mjs",
+    "smoke": "node tests/smoke/smoke.mjs",
+    "serve": "node scripts/serve.mjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "playwright-core": "^1.64.1"
+  }
+}
