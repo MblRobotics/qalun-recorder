@@ -1,11 +1,13 @@
 import { highlightTokens, sanitizeName } from './lib/text.js';
-import { resample, floatToInt16, encodeWav, measureLevels, qualityVerdict, TARGET_RATE } from './lib/wav.js';
-import { ayahOrder, audioFileName, buildExport, APP_VERSION } from './lib/dataset.js';
+import { TARGET_RATE, MIN_TAKE_SECONDS } from './lib/wav.js';
+import { encodeTake, encoderPath } from './lib/encoder.js';
+import { ayahOrder, audioFileName, buildExport, keptKeys, isKept, nextTake, APP_VERSION } from './lib/dataset.js';
 import { store } from './lib/store.js';
 import { Recorder } from './lib/recorder.js';
 
 const $ = (id) => document.getElementById(id);
 const MAX_SECONDS = 90;
+const TAP_CALM_MS = 600;
 const AR_DIGITS = '٠١٢٣٤٥٦٧٨٩';
 const ar = (n) => String(n).replace(/[0-9]/g, (d) => AR_DIGITS[d]);
 
@@ -17,6 +19,8 @@ const state = {
   current: null,      // stored recording for the shown ayah (or null)
   recordings: [],     // metadata of all stored recordings (no audio bytes)
   recorder: new Recorder(),
+  busy: false,        // starting or saving a take: the record button ignores taps
+  calmUntil: 0,       // extra taps right after a save must not land on the buttons that moved up
   recStart: 0,
   timer: null,
   lowSince: 0,
@@ -54,8 +58,9 @@ const progressKey = (p) => `progress:${sanitizeName(p.name).toLowerCase()}|${p.m
 
 async function refreshRecordings() {
   state.recordings = (await store.allRecordings()).sort((x, y) => x.id - y.id);
-  const n = state.recordings.length;
-  const mins = state.recordings.reduce((s, r) => s + r.duration_s, 0) / 60;
+  const kept = keptRecordings();
+  const n = kept.length;
+  const mins = kept.reduce((s, r) => s + r.duration_s, 0) / 60;
   $('stat-count').textContent = ar(n);
   $('stat-min').textContent = ar(mins.toFixed(1)).replace('.', '٫');
 }
@@ -189,17 +194,30 @@ function renderAyah() {
   updateButtons();
 }
 
+// The take of each ayah that counts (the reader's choice, else the last one).
+function keptRecordings() {
+  const kept = keptKeys(state.recordings);
+  return state.recordings.filter((r) => isKept(r, kept));
+}
+
 function latestTake(id) {
   const takes = state.recordings.filter((r) => r.ayah_id === id && r.mode === state.profile.mode);
-  return takes.length ? takes[takes.length - 1] : null;
+  if (!takes.length) return null;
+  const kept = keptKeys(takes);
+  return takes.find((r) => isKept(r, kept));
 }
 
 function updateButtons() {
-  const rec = state.recorder.recording;
+  const busy = state.busy;
+  const rec = state.recorder.recording || busy;
   const has = !!state.current;
   const b = $('btn-record');
-  b.classList.toggle('on', rec);
-  b.querySelector('.lbl').textContent = rec ? 'إيقاف' : 'سجّل';
+  b.classList.toggle('on', state.recorder.recording);
+  b.classList.toggle('busy', busy);
+  b.disabled = busy;
+  b.setAttribute('aria-busy', busy ? 'true' : 'false');
+  b.querySelector('.lbl').textContent = busy && !state.recorder.recording
+    ? 'جارٍ الحفظ…' : state.recorder.recording ? 'إيقاف' : 'سجّل';
   b.hidden = has && !rec;
   $('btn-play').disabled = rec || !has;
   $('btn-redo').disabled = rec || !has;
@@ -220,7 +238,11 @@ function setMeter(level) {
 }
 
 async function startRecording() {
-  if (!(await ensureMic())) return;
+  if (state.busy || state.recorder.recording) return;
+  state.busy = true; // a second tap while the microphone starts must not start twice
+  let ok = false;
+  try { ok = await ensureMic(); } finally { state.busy = false; }
+  if (!ok || state.recorder.recording) return;
   show('record');
   stopPlayback();
   state.lowSince = performance.now();
@@ -244,28 +266,56 @@ async function startRecording() {
 }
 
 async function stopRecording() {
-  if (!state.recorder.recording) return;
+  // Only the first «إيقاف» counts: while the take is being saved the button is
+  // disabled and further taps (or the timer / page-hide) are ignored.
+  if (!state.recorder.recording || state.busy) return;
+  state.busy = true;
   const { samples, sampleRate } = state.recorder.stop();
   try { state.wakeLock?.release(); } catch (e) { /* ignore */ }
   state.wakeLock = null;
-  updateButtons();
   setMeter(0);
   setStatus('جارٍ الحفظ…');
-  const pcm = resample(samples, sampleRate, TARGET_RATE);
-  for (let i = 0; i < pcm.length; i++) pcm[i] = Math.max(-1, Math.min(1, pcm[i]));
-  const duration = pcm.length / TARGET_RATE;
-  // levels of the saved 16 kHz file; clipping is judged on the raw microphone input
-  const levels = { ...measureLevels(pcm), clipped_fraction: measureLevels(samples).clipped_fraction };
-  const verdict = qualityVerdict(levels, duration);
-  if (verdict === 'empty') {
-    setStatus('التسجيل قصير جدًا. اضغط «سجّل» واقرأ الآية كاملة.', 'warn');
+  updateButtons();
+  try {
+    await saveTake(samples, sampleRate);
+  } finally {
+    state.busy = false;
+    state.calmUntil = performance.now() + TAP_CALM_MS;
     updateButtons();
+  }
+}
+
+// True while a tap should be ignored: a take is starting/saving, or one was just saved
+// (the record button disappears and «أعد التسجيل» moves under the reader's finger).
+function tapBlocked() {
+  return state.busy || performance.now() < state.calmUntil;
+}
+
+async function saveTake(samples, sampleRate) {
+  if (samples.length < MIN_TAKE_SECONDS * sampleRate) {
+    setStatus('التسجيل قصير جدًا فلم يُحفظ. اضغط «سجّل» واقرأ الآية كاملة.', 'warn');
+    return;
+  }
+  let res;
+  try {
+    res = await encodeTake(samples, sampleRate);
+  } catch (e) {
+    setStatus(`تعذّر تجهيز التسجيل (${e && e.message}). حاول مرة أخرى.`, 'bad');
+    return;
+  }
+  const { verdict, duration, levels, wav } = res;
+  if (verdict === 'empty') {
+    setStatus('التسجيل قصير جدًا فلم يُحفظ. اضغط «سجّل» واقرأ الآية كاملة.', 'warn');
+    return;
+  }
+  if (verdict === 'silent') {
+    setStatus('لم يُسمع صوت في التسجيل فلم يُحفظ. تأكّد أن الميكروفون يعمل واقترب من الهاتف، ثم اضغط «سجّل».', 'warn');
     return;
   }
   const id = currentAyahId();
   const [s, a, text] = state.data.ayahs[id - 1];
   const mode = state.profile.mode;
-  const take = state.recordings.filter((r) => r.ayah_id === id && r.mode === mode).length + 1;
+  const take = nextTake(state.recordings, id, mode);
   const rec = {
     reader: state.profile.name,
     surah: s, ayah: a, ayah_id: id, mode, take, text,
@@ -276,13 +326,12 @@ async function stopRecording() {
     input_sample_rate: sampleRate,
     recorded_at: new Date().toISOString(),
     levels,
-    wav: encodeWav(floatToInt16(pcm), TARGET_RATE),
+    wav,
   };
   try {
     rec.id = await store.addRecording(rec);
   } catch (e) {
     setStatus(`تعذّر الحفظ في الهاتف: ${e && e.name}. قد تكون الذاكرة ممتلئة.`, 'bad');
-    updateButtons();
     return;
   }
   await refreshRecordings();
@@ -293,10 +342,10 @@ async function stopRecording() {
     clipped: ['الصوت عالٍ ومشوَّش. يُفضَّل أن تعيد التسجيل والهاتف أبعد قليلاً.', 'bad'],
   }[verdict];
   setStatus(msg[0], msg[1]);
-  updateButtons();
 }
 
 async function onRecordButton() {
+  if (tapBlocked()) return;
   if (state.recorder.recording) await stopRecording();
   else await startRecording();
 }
@@ -310,7 +359,7 @@ function stopPlayback() {
 }
 
 async function onPlay() {
-  if (!state.current) return;
+  if (!state.current || tapBlocked()) return;
   stopPlayback();
   const wav = await store.getAudio(state.current.id);
   if (!wav) return;
@@ -319,7 +368,7 @@ async function onPlay() {
 }
 
 async function onRedo() {
-  if (!state.current) return;
+  if (!state.current || tapBlocked() || state.recorder.recording) return;
   stopPlayback();
   await store.deleteRecording(state.current.id);
   await refreshRecordings();
@@ -328,6 +377,7 @@ async function onRedo() {
 }
 
 async function advance() {
+  if (tapBlocked() || state.recorder.recording) return;
   stopPlayback();
   if (state.pos >= state.order.length - 1) {
     setStatus('وصلت إلى آخر آية في القائمة. جزاك الله خيرًا! أرسل تسجيلاتك.', 'good');
@@ -343,8 +393,9 @@ async function advance() {
 async function enterExport() {
   stopPlayback();
   await refreshRecordings();
-  const n = state.recordings.length;
-  const mins = state.recordings.reduce((s, r) => s + r.duration_s, 0) / 60;
+  const kept = keptRecordings();
+  const n = kept.length;
+  const mins = kept.reduce((s, r) => s + r.duration_s, 0) / 60;
   $('export-summary').textContent = n
     ? `لديك ${ar(n)} تسجيلًا (${ar(mins.toFixed(1)).replace('.', '٫')} دقيقة).`
     : 'لا توجد تسجيلات بعد.';
@@ -485,7 +536,7 @@ async function boot() {
     show('setup');
   }
   if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
-  window.__qalunRecorder = { state, APP_VERSION }; // for the smoke test / debugging
+  window.__qalunRecorder = { state, APP_VERSION, encoderPath }; // for the smoke test / debugging
 }
 
 boot();

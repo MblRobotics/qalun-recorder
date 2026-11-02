@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { resample, floatToInt16, encodeWav, decodeWav, measureLevels, qualityVerdict } from '../lib/wav.js';
+import { resample, floatToInt16, encodeWav, decodeWav, measureLevels, qualityVerdict, processTake, MIN_TAKE_SECONDS } from '../lib/wav.js';
 
 const sine = (freq, rate, secs, amp = 0.5) =>
   Float32Array.from({ length: Math.round(rate * secs) }, (_, i) => amp * Math.sin(2 * Math.PI * freq * i / rate));
@@ -71,5 +71,66 @@ test('measureLevels and qualityVerdict', () => {
   const clipped = sine(1000, 16000, 1, 1.5).map((x) => Math.max(-1, Math.min(1, x)));
   assert.equal(qualityVerdict(measureLevels(clipped), 1), 'clipped');
   assert.equal(qualityVerdict(l, 0.2), 'empty');
+  assert.equal(qualityVerdict(l, 0.79), 'empty');
+  assert.equal(qualityVerdict(l, MIN_TAKE_SECONDS), 'ok');
+  assert.equal(qualityVerdict(measureLevels(sine(1000, 16000, 1, 0.003)), 1), 'silent');
+  assert.equal(qualityVerdict(measureLevels(new Float32Array(16000)), 1), 'silent');
   assert.equal(measureLevels(new Float32Array(10)).rms_dbfs, -120);
+});
+
+// The straightforward per-sample kernel (the resampler before the polyphase cache).
+function resampleReference(input, inRate, outRate, halfTaps = 16) {
+  const ratio = inRate / outRate;
+  const out = new Float32Array(Math.floor(input.length / ratio));
+  const fc = Math.min(1, outRate / inRate) * 0.95;
+  const half = Math.ceil(halfTaps / fc);
+  for (let n = 0; n < out.length; n++) {
+    const t = n * ratio;
+    const center = Math.floor(t);
+    let acc = 0;
+    let wsum = 0;
+    for (let k = Math.max(0, center - half + 1); k <= Math.min(input.length - 1, center + half); k++) {
+      const x = t - k;
+      const u = fc * x;
+      const sinc = u === 0 ? 1 : Math.sin(Math.PI * u) / (Math.PI * u);
+      const w = 0.42 + 0.5 * Math.cos(Math.PI * x / half) + 0.08 * Math.cos(2 * Math.PI * x / half);
+      acc += input[k] * fc * sinc * w;
+      wsum += fc * sinc * w;
+    }
+    out[n] = wsum !== 0 ? acc / wsum : 0;
+  }
+  return out;
+}
+
+for (const inRate of [48000, 44100, 22050, 47999]) {
+  test(`polyphase resample ${inRate} matches the per-sample reference`, () => {
+    const x = Float32Array.from({ length: Math.round(inRate * 0.3) }, (_, i) => 0.4 * Math.sin(i / 7) + 0.2 * Math.sin(i / 2.3));
+    const a = resample(x, inRate, 16000);
+    const b = resampleReference(x, inRate, 16000);
+    assert.equal(a.length, b.length);
+    let maxDiff = 0;
+    for (let i = 0; i < a.length; i++) maxDiff = Math.max(maxDiff, Math.abs(a[i] - b[i]));
+    assert.ok(maxDiff < 1e-5, `max diff ${maxDiff}`);
+  });
+}
+
+test('resample of 30 s at 48 kHz is fast (stop must not freeze the phone)', () => {
+  const x = sine(300, 48000, 30, 0.3);
+  const t0 = performance.now();
+  const out = resample(x, 48000, 16000);
+  const ms = performance.now() - t0;
+  assert.equal(out.length, 480000);
+  assert.ok(ms < 3000, `took ${ms.toFixed(0)} ms`);
+});
+
+test('processTake: keeps a real take as a 16 kHz WAV, drops short or silent takes', () => {
+  const ok = processTake(sine(500, 48000, 2, 0.3), 48000);
+  assert.equal(ok.verdict, 'ok');
+  assert.ok(Math.abs(ok.duration - 2) < 1e-3);
+  const w = decodeWav(ok.wav);
+  assert.deepEqual([w.sampleRate, w.channels, w.samples.length], [16000, 1, 32000]);
+  const short = processTake(sine(500, 48000, 0.5, 0.3), 48000);
+  assert.deepEqual([short.verdict, short.wav], ['empty', null]);
+  const silent = processTake(new Float32Array(48000 * 2), 48000);
+  assert.deepEqual([silent.verdict, silent.wav], ['silent', null]);
 });

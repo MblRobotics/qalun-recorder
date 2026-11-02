@@ -46,6 +46,7 @@ async function recordTake(ms = 2500) {
   await page.waitForTimeout(ms);
   await page.click('#btn-record');
   await page.waitForFunction(() => !document.getElementById('btn-next').disabled, null, { timeout: 15000 });
+  await page.waitForTimeout(800); // taps right after a save are ignored on purpose
 }
 
 try {
@@ -90,6 +91,7 @@ try {
   await page.waitForTimeout(1500);
   await page.click('#btn-record');
   await page.waitForFunction(() => !document.getElementById('btn-next').disabled);
+  await page.waitForTimeout(800);
   assert.equal(await count(), 1);
   await page.click('#btn-next');
   step('skip one, record the next');
@@ -100,14 +102,52 @@ try {
   assert.equal(recs[0].ayah_id, first);
   assert.equal(recs[0].take, 1);
 
+  step('stop tapped 4 times quickly (slow phone): exactly one take, nothing else triggered');
+  await page.click('#btn-next');
+  const posBefore = await page.evaluate(() => window.__qalunRecorder.state.pos);
+  await page.click('#btn-record');
+  await page.waitForTimeout(2000);
+  const box = await page.locator('#btn-record').boundingBox();
+  const cx = box.x + box.width / 2;
+  const cy = box.y + box.height / 2;
+  for (let i = 0; i < 4; i++) {
+    await page.mouse.click(cx, cy);
+    if (i === 0) {
+      const label = await page.textContent('#btn-record .lbl');
+      assert.equal(label, 'جارٍ الحفظ…', `label right after stop: ${label}`);
+    }
+    await page.waitForTimeout(120);
+  }
+  await page.waitForFunction(() => !document.getElementById('btn-next').disabled, null, { timeout: 15000 });
+  await page.waitForTimeout(1500);
+  assert.equal(await count(), 3);
+  assert.equal(await page.evaluate(() => window.__qalunRecorder.state.recorder.recording), false);
+  assert.equal(await page.evaluate(() => window.__qalunRecorder.state.pos), posBefore);
+  assert.equal(await page.evaluate(() => window.__qalunRecorder.encoderPath()), 'worker', 'WAV encoding ran on the main thread');
+  const multi = await page.evaluate(() => window.__qalunRecorder.state.recordings.at(-1));
+  assert.equal(multi.take, 1);
+
+  step('a take under 0.8 s is not saved');
+  await page.click('#btn-next');
+  await page.click('#btn-record');
+  await page.waitForTimeout(300);
+  await page.click('#btn-record');
+  await page.waitForFunction(() => /قصير جدًا/.test(document.getElementById('status').textContent));
+  assert.equal(await count(), 3);
+  assert.equal(await page.isVisible('#btn-record'), true);
+  assert.equal(await page.textContent('#btn-record .lbl'), 'سجّل');
+  await page.waitForTimeout(800);
+  await page.click('#btn-skip');
+  await page.waitForTimeout(800);
+
   step('reload keeps recordings and position');
   await page.reload({ waitUntil: 'networkidle' });
   await page.waitForSelector('#screen-mic:not([hidden])');
   await page.click('#btn-mic');
   await page.waitForSelector('#screen-record:not([hidden])');
-  assert.equal(await count(), 2);
-  assert.equal(await page.evaluate(() => window.__qalunRecorder.state.pos), 2);
-  assert.equal(await page.textContent('#stat-count'), '٢');
+  assert.equal(await count(), 3);
+  assert.equal(await page.evaluate(() => window.__qalunRecorder.state.pos), 5);
+  assert.equal(await page.textContent('#stat-count'), '٣');
 
   step('hafs drill mode shows highlighted words and the Hafs form');
   await page.click('[data-action=settings] >> visible=true');
@@ -120,7 +160,7 @@ try {
   await page.evaluate(() => document.fonts.ready);
   await page.screenshot({ path: path.join(out, '4-record-hafs.png') });
   await recordTake(2000);
-  assert.equal(await count(), 3);
+  assert.equal(await count(), 4);
 
   step('new session refused before export');
   await page.click('[data-action=export] >> visible=true');
@@ -128,7 +168,7 @@ try {
   await page.waitForFunction(() => !document.getElementById('btn-download').disabled);
   await page.click('#btn-new-session');
   await page.waitForFunction(() => /لم تُرسَل/.test(document.getElementById('export-status').textContent));
-  assert.equal(await count(), 3);
+  assert.equal(await count(), 4);
 
   step('export ZIP (download path)');
   const [dl] = await Promise.all([page.waitForEvent('download'), page.click('#btn-download')]);
@@ -139,7 +179,9 @@ try {
   const base = dl.suggestedFilename().replace(/\.zip$/, '');
   assert.match(base, /^Smokeتجربة_\d{8}-\d{4}$/);
   const manifest = JSON.parse(new TextDecoder().decode(entries.find((e) => e.name === `${base}/manifest.json`).data));
-  assert.equal(manifest.files.length, 3);
+  assert.equal(manifest.files.length, 4);
+  assert.equal(manifest.app_version, '1.1.0');
+  assert.ok(manifest.files.every((f) => f.kept === true), 'one take per ayah, all kept');
   assert.equal(manifest.reader.age_range, '30-44');
   assert.equal(manifest.mode, 'mixed');
   assert.equal(manifest.capture.track_settings.echoCancellation, false);

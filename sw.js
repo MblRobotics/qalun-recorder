@@ -1,9 +1,9 @@
 // Offline support: network first (so updates arrive), cache as fallback.
-const CACHE = 'qalun-recorder-v1';
+const CACHE = 'qalun-recorder-v2';
 const SHELL = [
   './', 'index.html', 'styles.css', 'app.js', 'manifest.webmanifest', 'icon.svg',
   'lib/text.js', 'lib/wav.js', 'lib/zip.js', 'lib/dataset.js', 'lib/store.js',
-  'lib/recorder.js', 'lib/capture-worklet.js', 'data/quran.json', 'vendor/fonts/qalun.ttf',
+  'lib/recorder.js', 'lib/capture-worklet.js', 'lib/encoder.js', 'lib/encode-worker.js', 'data/quran.json', 'vendor/fonts/qalun.ttf',
 ];
 
 self.addEventListener('install', (ev) => {

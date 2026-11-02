@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { ayahOrder, audioFileName, exportBaseName, buildManifest, buildExport, MAX_WORDS } from '../lib/dataset.js';
+import { ayahOrder, audioFileName, exportBaseName, buildManifest, buildExport, keptKeys, isKept, nextTake, MAX_WORDS, APP_VERSION } from '../lib/dataset.js';
 import { splitWords } from '../lib/text.js';
 import { readZip } from '../lib/zip.js';
 import { encodeWav, decodeWav, floatToInt16, measureLevels } from '../lib/wav.js';
@@ -61,14 +61,14 @@ test('manifest shape (hafs drill lists targeted drift words with loc)', () => {
     recordings: [fakeRec(id, 'hafs')], userAgent: 'UA', capture: { context_sample_rate: 48000 },
     exportedAt: new Date('2026-10-31T10:00:00Z'),
   });
-  assert.equal(m.app_version, '1.0.0');
+  assert.equal(m.app_version, APP_VERSION);
   assert.deepEqual(m.reader, { name: 'AbuAli', age_range: '30-44', gender: null });
   assert.equal(m.mode, 'hafs');
   assert.equal(m.user_agent, 'UA');
   assert.deepEqual(m.capture, { context_sample_rate: 48000 });
   const f = m.files[0];
   assert.deepEqual(Object.keys(f).sort(), ['ayah', 'ayah_id', 'clipped_fraction', 'drift_words', 'duration_s', 'file',
-    'input_sample_rate', 'mode', 'peak', 'peak_dbfs', 'recorded_at', 'rms', 'rms_dbfs', 'sample_rate', 'surah', 'take', 'text'].sort());
+    'input_sample_rate', 'kept', 'mode', 'peak', 'peak_dbfs', 'recorded_at', 'rms', 'rms_dbfs', 'sample_rate', 'surah', 'take', 'text'].sort());
   assert.equal(f.file, 'audio/AbuAli_001_003_hafs_1.wav');
   assert.deepEqual([f.surah, f.ayah, f.ayah_id, f.sample_rate], [1, 3, 3, 16000]);
   assert.deepEqual(f.drift_words, [{ loc: '1:3:1', qalun: 'مَلِكِ', hafs: 'مَٰلِكِ', class: 'long_vowel' }]);
@@ -93,10 +93,32 @@ test('buildExport ZIP layout: <name>_<date>/manifest.json + audio/*.wav, manifes
   ]);
   const m = JSON.parse(new TextDecoder().decode(entries[0].data));
   assert.equal(m.files.length, 3);
+  assert.deepEqual(m.files.map((f) => [f.file, f.kept]), [
+    ['audio/AbuAli_001_001_qalun_1.wav', false],
+    ['audio/AbuAli_001_001_qalun_2.wav', true],
+    ['audio/AbuAli_001_003_qalun_1.wav', true],
+  ]);
   for (const f of m.files) {
     const e = entries.find((x) => x.name === `AbuAli_20261031-0905/${f.file}`);
     const w = decodeWav(e.data);
     assert.equal(w.sampleRate, 16000);
     assert.equal(w.samples.length / 16000, f.duration_s);
   }
+});
+
+test('kept take per ayah+mode: the reader choice, else the last take; nextTake continues numbering', () => {
+  const recs = [fakeRec(1, 'qalun', 1), fakeRec(1, 'qalun', 2), fakeRec(1, 'qalun', 3), fakeRec(1, 'hafs', 1), fakeRec(2, 'qalun', 1)]
+    .map((r, i) => ({ ...r, id: i + 1 }));
+  const keptFiles = (rs) => { const k = keptKeys(rs); return rs.filter((r) => isKept(r, k)).map((r) => r.file).sort(); };
+  assert.deepEqual(keptFiles(recs), [
+    'AbuAli_001_001_hafs_1.wav', 'AbuAli_001_001_qalun_3.wav', 'AbuAli_001_002_qalun_1.wav']);
+  recs[0].chosen = true;
+  assert.deepEqual(keptFiles(recs), [
+    'AbuAli_001_001_hafs_1.wav', 'AbuAli_001_001_qalun_1.wav', 'AbuAli_001_002_qalun_1.wav']);
+  const m = buildManifest({ profile: { name: 'x', mode: 'qalun' }, recordings: recs });
+  assert.equal(m.files.filter((f) => f.kept).length, 3);
+  assert.equal(nextTake(recs, 1, 'qalun'), 4);
+  assert.equal(nextTake(recs, 1, 'hafs'), 2);
+  assert.equal(nextTake(recs, 9, 'qalun'), 1);
+  assert.equal(nextTake([fakeRec(1, 'qalun', 2)], 1, 'qalun'), 3); // a deleted take 1 does not reuse 2
 });

@@ -67,6 +67,9 @@ input[type=text]:focus, select:focus { outline: none; border-color: var(--green-
 .btn.rec .dot { width: 22px; height: 22px; border-radius: 50%; background: var(--red); }
 .btn.rec.on { background: var(--red); color: #fff; }
 .btn.rec.on .dot { border-radius: 4px; background: #fff; animation: pulse 1s infinite; }
+.btn.rec.busy, .btn.rec.busy:disabled { opacity: 0.75; background: #fff; color: var(--red); }
+.btn.rec.busy .dot { border-radius: 50%; background: transparent; border: 3px solid var(--red); border-top-color: transparent; animation: spin 0.8s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
 @keyframes pulse { 50% { opacity: 0.4; } }
 
 .bar { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
